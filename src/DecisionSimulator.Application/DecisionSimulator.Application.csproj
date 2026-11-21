@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>DecisionSimulator.Application</RootNamespace>
+    <AssemblyName>DecisionSimulator.Application</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DecisionSimulator.Domain\DecisionSimulator.Domain.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FluentValidation" Version="11.9.2" />
+    <PackageReference Include="FluentValidation.DependencyInjectionExtensions" Version="11.9.2" />
+    <!--
+      The application layer exposes IApplicationDbContext with DbSet<T> members.
+      That needs the EF Core abstractions, not the SQL Server provider, so the
+      application stays provider-agnostic and testable against SQLite or InMemory.
+    -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.0" />
+  </ItemGroup>
+
+</Project>

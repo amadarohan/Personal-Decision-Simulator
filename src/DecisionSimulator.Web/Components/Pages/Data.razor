@@ -1,0 +1,305 @@
+@page "/data"
+@using DecisionSimulator.Application.Common
+@using DecisionSimulator.Application.Features.Data
+@using DecisionSimulator.Domain.Enums
+@using DecisionSimulator.Web.Localization
+@using DecisionSimulator.Web.Services
+@inject DataProvenanceService DataService
+@inject DisplayFormatter Formatter
+@inject IUserPreferencesAccessor Preferences
+@inject LanguageService Language
+
+<PageTitle>@Language.Strings.DataTitle</PageTitle>
+
+<h1>@Language.Strings.DataTitle</h1>
+
+<p class="lede">
+    @Language.Strings.DataLede
+</p>
+
+<section class="panel">
+    <h2>@Language.Strings.DataSources</h2>
+
+    @if (_sources.Count == 0)
+    {
+        <p class="muted">@Language.Strings.NoSources</p>
+    }
+    else
+    {
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>@Language.Strings.FieldName</th>
+                    <th>@Language.Strings.ColProvider</th>
+                    <th>@Language.Strings.ColReliability</th>
+                    <th>@Language.Strings.ColUpdateFrequency</th>
+                    <th>@Language.Strings.ColActive</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var source in _sources)
+                {
+                    <tr>
+                        <td>@source.Name</td>
+                        <td>@EnumLabels.Label(source.ProviderType, _persian)</td>
+                        <td>@EnumLabels.Label(source.ReliabilityLevel, _persian)</td>
+                        <td>@(source.UpdateFrequency ?? Language.Strings.Dash)</td>
+                        <td>@(source.IsActive ? Language.Strings.Yes : Language.Strings.No)</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+
+    <div class="form-grid">
+        <label>
+            @Language.Strings.FieldName
+            <input @bind="_sourceName" placeholder="@Language.Strings.SourceNamePlaceholder" />
+        </label>
+        <label>
+            @Language.Strings.ColProvider
+            <select @bind="_providerType">
+                @foreach (var value in Enum.GetValues<DataProviderType>())
+                {
+                    <option value="@value">@EnumLabels.Label(value, _persian)</option>
+                }
+            </select>
+        </label>
+        <label>
+            @Language.Strings.ColReliability
+            <select @bind="_reliability">
+                @foreach (var value in Enum.GetValues<ReliabilityLevel>())
+                {
+                    <option value="@value">@EnumLabels.Label(value, _persian)</option>
+                }
+            </select>
+        </label>
+        <label>
+            @Language.Strings.FieldBaseUrl
+            <input @bind="_baseUrl" placeholder="https://" />
+        </label>
+    </div>
+
+    <button class="primary" @onclick="CreateSourceAsync" disabled="@_busy">
+        @Language.Strings.AddSource
+    </button>
+</section>
+
+<section class="panel">
+    <h2>@Language.Strings.Indicators</h2>
+
+    @if (_indicators.Count == 0)
+    {
+        <p class="muted">
+            @Language.Strings.NoIndicators
+        </p>
+    }
+    else
+    {
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>@Language.Strings.FieldName</th>
+                    <th>@Language.Strings.ColCode</th>
+                    <th>@Language.Strings.ColCountry</th>
+                    <th>@Language.Strings.ColUnit</th>
+                    <th>@Language.Strings.ColLatestValue</th>
+                    <th>@Language.Strings.ColObserved</th>
+                    <th>@Language.Strings.ColFreshness</th>
+                    <th>@Language.Strings.ColConfidence</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var indicator in _indicators)
+                {
+                    <tr>
+                        <td>@indicator.Name</td>
+                        <td>@indicator.IndicatorCode</td>
+                        <td>@indicator.CountryCode</td>
+                        <td>@indicator.Unit</td>
+                        <td>@(indicator.CurrentValue?.ToString("N2", System.Globalization.CultureInfo.InvariantCulture) ?? Language.Strings.Dash)</td>
+                        <td>
+                            @(indicator.ObservationDate is { } observed
+                                ? Formatter.FormatDate(observed, _preferences.CalendarSystem, _preferences.TimeZoneId)
+                                : Language.Strings.Never)
+                        </td>
+                        <td><span class="pill">@EnumLabels.Label(indicator.Freshness, _persian)</span></td>
+                        <td>@EnumLabels.Label(indicator.Confidence, _persian)</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+
+    <div class="form-grid">
+        <label>
+            @Language.Strings.FieldName
+            <input @bind="_indicatorName" placeholder="@Language.Strings.IndicatorNamePlaceholder" />
+        </label>
+        <label>
+            @Language.Strings.FieldCode
+            <input @bind="_indicatorCode" placeholder="@Language.Strings.IndicatorCodePlaceholder" />
+        </label>
+        <label>
+            @Language.Strings.FieldCategory
+            <select @bind="_indicatorCategory">
+                @foreach (var value in Enum.GetValues<VariableCategory>())
+                {
+                    <option value="@value">@EnumLabels.Label(value, _persian)</option>
+                }
+            </select>
+        </label>
+        <label>
+            @Language.Strings.FieldCountryCode
+            <input @bind="_indicatorCountry" maxlength="3" />
+        </label>
+        <label>
+            @Language.Strings.FieldScope
+            <select @bind="_indicatorScope">
+                @foreach (var value in Enum.GetValues<GeographicScope>())
+                {
+                    <option value="@value">@EnumLabels.Label(value, _persian)</option>
+                }
+            </select>
+        </label>
+        <label>
+            @Language.Strings.FieldUnit
+            <input @bind="_indicatorUnit" placeholder="@Language.Strings.UnitPlaceholder" />
+        </label>
+    </div>
+
+    <button class="primary" @onclick="CreateIndicatorAsync" disabled="@_busy">
+        @Language.Strings.AddIndicator
+    </button>
+
+    @if (_error is not null)
+    {
+        <p class="error" role="alert">@_error</p>
+    }
+</section>
+
+@code {
+    private IReadOnlyList<DataSourceDto> _sources = [];
+    private IReadOnlyList<EconomicIndicatorDto> _indicators = [];
+    private UserPreferences _preferences = UserPreferences.Default;
+
+    private string _sourceName = string.Empty;
+    private DataProviderType _providerType = DataProviderType.Manual;
+    private ReliabilityLevel _reliability = ReliabilityLevel.Unknown;
+    private string? _baseUrl;
+
+    private string _indicatorName = string.Empty;
+    private string _indicatorCode = string.Empty;
+    private VariableCategory _indicatorCategory = VariableCategory.Economic;
+    private string _indicatorCountry = "IR";
+    private GeographicScope _indicatorScope = GeographicScope.Country;
+    private string _indicatorUnit = string.Empty;
+
+    private bool _busy;
+    private bool _persian;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Language.EnsureLoadedAsync();
+        _persian = Language.IsPersianLanguage;
+
+        // The unit is free text the user can overwrite, but the starting value
+        // should match the interface language rather than always being English.
+        _indicatorUnit = Language.Strings.UnitPlaceholder;
+
+        _preferences = await Preferences.GetAsync();
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        var sources = await DataService.ListSourcesAsync();
+        if (sources.Succeeded)
+        {
+            _sources = sources.Value ?? [];
+        }
+
+        var indicators = await DataService.ListIndicatorsAsync();
+        if (indicators.Succeeded)
+        {
+            _indicators = indicators.Value ?? [];
+        }
+    }
+
+    private async Task CreateSourceAsync()
+    {
+        _error = null;
+
+        if (string.IsNullOrWhiteSpace(_sourceName))
+        {
+            _error = Language.Strings.ErrorSourceNameRequired;
+            return;
+        }
+
+        _busy = true;
+
+        try
+        {
+            var result = await DataService.CreateSourceAsync(new CreateDataSourceRequest(
+                _sourceName,
+                _providerType,
+                _reliability,
+                _baseUrl));
+
+            if (!result.Succeeded)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _sourceName = string.Empty;
+            _baseUrl = null;
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CreateIndicatorAsync()
+    {
+        _error = null;
+
+        if (string.IsNullOrWhiteSpace(_indicatorName) || string.IsNullOrWhiteSpace(_indicatorCode))
+        {
+            _error = Language.Strings.ErrorIndicatorRequired;
+            return;
+        }
+
+        _busy = true;
+
+        try
+        {
+            var result = await DataService.CreateIndicatorAsync(new CreateEconomicIndicatorRequest(
+                _indicatorName,
+                _indicatorCode,
+                _indicatorCategory,
+                _indicatorCountry,
+                _indicatorScope,
+                _indicatorUnit));
+
+            if (!result.Succeeded)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _indicatorName = string.Empty;
+            _indicatorCode = string.Empty;
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

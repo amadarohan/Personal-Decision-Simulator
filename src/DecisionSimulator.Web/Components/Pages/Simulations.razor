@@ -1,0 +1,253 @@
+@page "/simulations"
+@using DecisionSimulator.Application.Common
+@using DecisionSimulator.Application.Features.Decisions
+@using DecisionSimulator.Application.Features.Scenarios
+@using DecisionSimulator.Application.Features.Simulations
+@using DecisionSimulator.Domain.Enums
+@using DecisionSimulator.Web.Localization
+@using DecisionSimulator.Web.Services
+@inject ScenarioService ScenarioService
+@inject SimulationService SimulationService
+@inject DisplayFormatter Formatter
+@inject IUserPreferencesAccessor Preferences
+@inject NavigationManager Navigation
+@inject LanguageService Language
+
+<PageTitle>@Language.Strings.SimulationsTitle</PageTitle>
+
+<h1>@Language.Strings.SimulationsTitle</h1>
+
+<p class="lede">
+    @Language.Strings.SimulationsLede
+</p>
+
+<section class="panel">
+    <h2>@Language.Strings.RunScenarioHeading</h2>
+
+    <div class="form-grid">
+        <label>
+            @Language.Strings.FieldScenario
+            <select @bind="_scenarioId">
+                <option value="@Guid.Empty">@Language.Strings.SelectScenario</option>
+                @foreach (var scenario in _scenarios)
+                {
+                    <option value="@scenario.Id">@scenario.Name</option>
+                }
+            </select>
+        </label>
+
+        <label>
+            @Language.Strings.FieldModel
+            <select @bind="_modelKey">
+                @foreach (var model in SimulationService.AvailableModels)
+                {
+                    <option value="@model.ModelKey">@model.DisplayName</option>
+                }
+            </select>
+        </label>
+
+        <label>
+            @Language.Strings.FieldIterations
+            <input type="number" min="1" max="200000" @bind="_iterations" />
+        </label>
+
+        <label>
+            @Language.Strings.FieldSeed
+            <input type="number" @bind="_seed" placeholder="@Language.Strings.SeedPlaceholder" />
+        </label>
+    </div>
+
+    <button class="primary" @onclick="RunAsync" disabled="@_busy">
+        @(_busy ? Language.Strings.Running : Language.Strings.RunSimulation)
+    </button>
+
+    @if (_error is not null)
+    {
+        <p class="error" role="alert">@_error</p>
+    }
+</section>
+
+@if (_result is not null)
+{
+    <section class="panel">
+        <header class="page-header">
+            <h2>@_result.ModelKey v@_result.ModelVersion</h2>
+            <span class="pill large">@EnumLabels.Label(_result.Status, _persian)</span>
+        </header>
+
+        <p class="muted">
+            @_result.Iterations @Language.Strings.IterationsLabel · @Language.Strings.SeedLabel @_result.Seed ·
+            @Language.Strings.AssumptionSetShort v@_result.AssumptionSetVersion
+        </p>
+
+        @if (_result.MissingInputs.Count > 0)
+        {
+            <p class="notice">
+                @Language.Strings.MissingAssumptionsPrefix
+                @string.Join(", ", _result.MissingInputs).
+            </p>
+        }
+
+        @if (_result.ErrorMessage is not null)
+        {
+            <p class="error" role="alert">@_result.ErrorMessage</p>
+        }
+
+        @if (_result.Metrics.Count > 0)
+        {
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>@Language.Strings.ColMetric</th>
+                        <th>@Language.Strings.ColMean</th>
+                        <th>@Language.Strings.ColStdDev</th>
+                        <th>@Language.Strings.ColMin</th>
+                        <th>@Language.Strings.ColMax</th>
+                        <th>@Language.Strings.ColPercentiles</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var metric in _result.Metrics)
+                    {
+                        <tr>
+                            <td>@metric.MetricKey</td>
+                            <td>@FormatMetric(metric, metric.Mean)</td>
+                            <td>@(metric.StandardDeviation is { } sd ? FormatMetric(metric, sd) : Language.Strings.Dash)</td>
+                            <td>@FormatMetric(metric, metric.Minimum)</td>
+                            <td>@FormatMetric(metric, metric.Maximum)</td>
+                            <td>
+                                @foreach (var percentile in metric.Percentiles.OrderBy(p => p.Key))
+                                {
+                                    <span class="pill">p@(percentile.Key.ToString("N0")): @FormatMetric(metric, percentile.Value)</span>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+
+            <p class="muted">
+                @Formatter.FormatPercent(_result.ShareOfPathsWithNegativeCash) @Language.Strings.NegativeCashNote
+            </p>
+        }
+
+        @if (_result.ModelAssumptions.Count > 0)
+        {
+            <h3>@Language.Strings.ModelAssumptions</h3>
+            <ul class="assumption-list">
+                @foreach (var assumption in _result.ModelAssumptions)
+                {
+                    <li>@assumption</li>
+                }
+            </ul>
+        }
+
+        @if (_result.WarningCounts.Count > 0)
+        {
+            <h3>@Language.Strings.Warnings</h3>
+            <ul class="assumption-list">
+                @foreach (var warning in _result.WarningCounts)
+                {
+                    <li>@warning.Key (@warning.Value @Language.Strings.Paths)</li>
+                }
+            </ul>
+        }
+    </section>
+}
+
+@code {
+    private IReadOnlyList<ScenarioSummaryDto> _scenarios = [];
+    private UserPreferences _preferences = UserPreferences.Default;
+
+    private Guid _scenarioId = Guid.Empty;
+    private string _modelKey = string.Empty;
+    private int _iterations = 1_000;
+    private int? _seed;
+
+    private bool _busy;
+    private bool _persian;
+    private string? _error;
+    private SimulationResultDto? _result;
+
+    /// <summary>
+    /// Set when the page is reached from a scenario, so the run starts on the
+    /// scenario the user was already looking at.
+    /// </summary>
+    [SupplyParameterFromQuery(Name = "scenario")]
+    public Guid? ScenarioQuery { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Language.EnsureLoadedAsync();
+        _persian = Language.IsPersianLanguage;
+
+        _preferences = await Preferences.GetAsync();
+        _scenarios = await ScenarioService.ListAsync();
+        _modelKey = SimulationService.AvailableModels.FirstOrDefault()?.ModelKey ?? string.Empty;
+
+        if (ScenarioQuery is { } requested && requested != Guid.Empty)
+        {
+            _scenarioId = requested;
+        }
+    }
+
+    private string FormatMetric(SimulationMetricDto metric, decimal value) => metric.Unit switch
+    {
+        MetricUnit.Currency => Formatter.FormatMoney(
+            value,
+            _preferences.DefaultCurrencyCode,
+            _preferences.CurrencyUnitConvention,
+            CurrencyUnitLabel),
+        MetricUnit.Percentage => Formatter.FormatPercent(value),
+        _ => value.ToString("N2", System.Globalization.CultureInfo.InvariantCulture)
+    };
+
+    /// <summary>
+    /// The translated unit name for money. The formatter is a singleton and
+    /// cannot read the language, so the label is resolved here.
+    /// </summary>
+    private string CurrencyUnitLabel =>
+        _preferences.CurrencyUnitConvention == CurrencyUnitConvention.Toman
+            ? Language.Strings.CurrencyToman
+            : Language.Strings.CurrencyRial;
+
+    private async Task RunAsync()
+    {
+        _error = null;
+        _result = null;
+
+        if (_scenarioId == Guid.Empty)
+        {
+            _error = Language.Strings.ErrorChooseScenario;
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_modelKey))
+        {
+            _error = Language.Strings.ErrorChooseModel;
+            return;
+        }
+        _busy = true;
+
+        try
+        {
+            var result = await SimulationService.RunAsync(new RunSimulationRequest(
+                _scenarioId,
+                _modelKey,
+                _iterations,
+                _seed));
+
+            if (!result.Succeeded)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _result = result.Value;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

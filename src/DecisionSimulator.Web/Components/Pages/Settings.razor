@@ -1,0 +1,270 @@
+@page "/settings"
+@using DecisionSimulator.Application.Common
+@using DecisionSimulator.Application.Features.Settings
+@using DecisionSimulator.Domain.Enums
+@using DecisionSimulator.Web.Localization
+@using DecisionSimulator.Web.Services
+@inject SettingsService SettingsService
+@inject DisplayFormatter Formatter
+@inject IUserPreferencesAccessor Preferences
+@inject LanguageService Language
+
+<PageTitle>@Language.Strings.SettingsTitle</PageTitle>
+
+<h1>@Language.Strings.SettingsTitle</h1>
+
+<p class="lede">
+    @Language.Strings.SettingsLede
+</p>
+
+<section class="panel">
+    <h2>@Language.Strings.Profile</h2>
+
+    <div class="form-grid">
+        <label>
+            @Language.Strings.FieldDisplayName
+            <input @bind="_displayName" />
+        </label>
+        <label>
+            @Language.Strings.FieldCountryCode
+            <input @bind="_countryCode" maxlength="3" />
+        </label>
+        <label>
+            @Language.Strings.FieldCountryName
+            <input @bind="_countryName" />
+        </label>
+        <label>
+            @Language.Strings.FieldCity
+            <input @bind="_city" />
+        </label>
+        <label>
+            @Language.Strings.FieldTimeZone
+            <input @bind="_timeZoneId" placeholder="Asia/Tehran" />
+        </label>
+        <label>
+            @Language.Strings.FieldLanguage
+            <input @bind="_preferredLanguage" placeholder="fa-IR" />
+        </label>
+        <label>
+            @Language.Strings.FieldCalendar
+            <select @bind="_calendarSystem">
+                @foreach (var value in Enum.GetValues<CalendarSystem>())
+                {
+                    <option value="@value">@EnumLabels.Label(value, _persian)</option>
+                }
+            </select>
+        </label>
+        <label>
+            @Language.Strings.FieldCurrencyCode
+            <input @bind="_defaultCurrencyCode" maxlength="3" />
+        </label>
+        <label>
+            @Language.Strings.FieldCurrencyUnit
+            <select @bind="_currencyUnitConvention">
+                @foreach (var value in Enum.GetValues<CurrencyUnitConvention>())
+                {
+                    <option value="@value">@EnumLabels.Label(value, _persian)</option>
+                }
+            </select>
+        </label>
+    </div>
+
+    <button class="primary" @onclick="SaveProfileAsync" disabled="@_busy">
+        @(_busy ? Language.Strings.Saving : Language.Strings.SaveProfile)
+    </button>
+
+    @if (_profileMessage is not null)
+    {
+        <p class="notice">@_profileMessage</p>
+    }
+</section>
+
+<section class="panel">
+    <h2>@Language.Strings.ApplicationSettings</h2>
+
+    <p class="muted">
+        @Language.Strings.SecretsNote
+    </p>
+
+    @if (_settings.Count == 0)
+    {
+        <p class="muted">@Language.Strings.NoSettings</p>
+    }
+    else
+    {
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>@Language.Strings.ColKey</th>
+                    <th>@Language.Strings.ColValue</th>
+                    <th>@Language.Strings.ColUpdated</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var setting in _settings)
+                {
+                    <tr>
+                        <td><code>@setting.Key</code></td>
+                        <td>@setting.Value</td>
+                        <td>@Formatter.FormatDateTime(setting.UpdatedAtUtc, _preferences.CalendarSystem, _preferences.TimeZoneId)</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+
+    <div class="form-grid">
+        <label>
+            @Language.Strings.ColKey
+            <input @bind="_settingKey" placeholder="ui.defaultCurrencyCode" />
+        </label>
+        <label>
+            @Language.Strings.ColValue
+            <input @bind="_settingValue" />
+        </label>
+    </div>
+
+    <button class="primary" @onclick="SaveSettingAsync" disabled="@_busy">
+        @Language.Strings.SaveSetting
+    </button>
+
+    @if (_error is not null)
+    {
+        <p class="error" role="alert">@_error</p>
+    }
+</section>
+
+@code {
+    private IReadOnlyList<AppSettingDto> _settings = [];
+    private UserPreferences _preferences = UserPreferences.Default;
+
+    private string _displayName = string.Empty;
+    private string _countryCode = "IR";
+    private string _countryName = "Iran";
+    private string _city = "Tehran";
+    private string _timeZoneId = "Asia/Tehran";
+    private string _preferredLanguage = "fa-IR";
+    private CalendarSystem _calendarSystem = CalendarSystem.Jalali;
+    private string _defaultCurrencyCode = "IRR";
+    private CurrencyUnitConvention _currencyUnitConvention = CurrencyUnitConvention.Toman;
+
+    private string _settingKey = string.Empty;
+    private string _settingValue = string.Empty;
+
+    private bool _busy;
+    private bool _persian;
+    private string? _error;
+    private string? _profileMessage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Language.EnsureLoadedAsync();
+        _persian = Language.IsPersianLanguage;
+
+        _preferences = await Preferences.GetAsync();
+
+        var profile = await SettingsService.GetProfileAsync();
+
+        if (profile.Succeeded && profile.Value is not null)
+        {
+            _displayName = profile.Value.DisplayName;
+            _countryCode = profile.Value.CountryCode;
+            _countryName = profile.Value.CountryName;
+            _city = profile.Value.City ?? string.Empty;
+            _timeZoneId = profile.Value.TimeZoneId;
+            _preferredLanguage = profile.Value.PreferredLanguage;
+            _calendarSystem = profile.Value.CalendarSystem;
+            _defaultCurrencyCode = profile.Value.DefaultCurrencyCode;
+            _currencyUnitConvention = profile.Value.CurrencyUnitConvention;
+        }
+
+        await ReloadSettingsAsync();
+    }
+
+    private async Task ReloadSettingsAsync()
+    {
+        var result = await SettingsService.ListAsync();
+
+        if (result.Succeeded)
+        {
+            _settings = result.Value ?? [];
+        }
+    }
+
+    private async Task SaveProfileAsync()
+    {
+        _error = null;
+        _profileMessage = null;
+
+        if (string.IsNullOrWhiteSpace(_displayName))
+        {
+            _error = Language.Strings.ErrorDisplayNameRequired;
+            return;
+        }
+
+        _busy = true;
+
+        try
+        {
+            var result = await SettingsService.UpdateProfileAsync(new UpdateUserProfileRequest(
+                _displayName,
+                _countryCode,
+                _countryName,
+                _city,
+                _timeZoneId,
+                _preferredLanguage,
+                _calendarSystem,
+                _defaultCurrencyCode,
+                _currencyUnitConvention));
+
+            if (!result.Succeeded)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _profileMessage = Language.Strings.ProfileSaved;
+            _preferences = await Preferences.GetAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task SaveSettingAsync()
+    {
+        _error = null;
+        _profileMessage = null;
+
+        if (string.IsNullOrWhiteSpace(_settingKey))
+        {
+            _error = Language.Strings.ErrorSettingKeyRequired;
+            return;
+        }
+
+        _busy = true;
+
+        try
+        {
+            var result = await SettingsService.SetAsync(
+                _settingKey,
+                new SetSettingRequest(_settingValue));
+
+            if (!result.Succeeded)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _settingKey = string.Empty;
+            _settingValue = string.Empty;
+
+            await ReloadSettingsAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

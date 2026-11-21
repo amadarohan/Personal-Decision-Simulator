@@ -1,0 +1,272 @@
+@page "/assistant"
+@using DecisionSimulator.Application.Common
+@using DecisionSimulator.Application.Features.AI
+@using DecisionSimulator.Domain.Enums
+@using DecisionSimulator.Web.Localization
+@using DecisionSimulator.Web.Services
+@inject AIConversationService AssistantService
+@inject DisplayFormatter Formatter
+@inject IUserPreferencesAccessor Preferences
+@inject LanguageService Language
+
+<PageTitle>@Language.Strings.AssistantTitle</PageTitle>
+
+<h1>@Language.Strings.AssistantTitle</h1>
+
+<p class="lede">
+    @Language.Strings.AssistantLede
+</p>
+
+@if (_status is not null && !_status.IsAvailable)
+{
+    <p class="notice">
+        @(_status.ProviderKind == AIProviderKind.None
+            ? Language.Strings.NoModelConfigured
+            : _status.UnavailableReason ?? Language.Strings.NoModelConfigured)
+        @Language.Strings.EverythingElseWorks
+    </p>
+}
+
+<section class="panel">
+    <h2>@Language.Strings.Conversations</h2>
+
+    <div class="form-grid">
+        <label>
+            @Language.Strings.FieldTitle
+            <input @bind="_newTitle" placeholder="@Language.Strings.ConversationTitlePlaceholder" />
+        </label>
+        <label>
+            @Language.Strings.FieldContext
+            <select @bind="_newContext">
+                @foreach (var value in Enum.GetValues<AIContextType>())
+                {
+                    <option value="@value">@EnumLabels.Label(value, _persian)</option>
+                }
+            </select>
+        </label>
+    </div>
+
+    <button class="primary" @onclick="CreateConversationAsync" disabled="@_busy">
+        @Language.Strings.StartConversation
+    </button>
+
+    @if (_conversations.Count > 0)
+    {
+        <ul class="card-list">
+            @foreach (var conversation in _conversations)
+            {
+                <li class="card">
+                    <div class="card-header">
+                        <button class="link" @onclick="() => SelectAsync(conversation.Id)">
+                            @conversation.Title
+                        </button>
+                        <span class="pill">@conversation.MessageCount @Language.Strings.Messages</span>
+                    </div>
+                    <p class="muted">
+                        @EnumLabels.Label(conversation.ContextType, _persian) ·
+                        @Formatter.FormatDateTime(conversation.UpdatedAtUtc, _preferences.CalendarSystem, _preferences.TimeZoneId)
+                    </p>
+                </li>
+            }
+        </ul>
+    }
+</section>
+
+@if (_active is not null)
+{
+    <section class="panel">
+        <h2>@_active.Title</h2>
+
+        <div class="transcript">
+            @foreach (var message in _active.Messages)
+            {
+                <article class="message @message.Role.ToString().ToLowerInvariant()">
+                    <header>
+                        <strong>@EnumLabels.Label(message.Role, _persian)</strong>
+                        <span class="muted">
+                            @Formatter.FormatDateTime(message.CreatedAtUtc, _preferences.CalendarSystem, _preferences.TimeZoneId)
+                        </span>
+                    </header>
+                    <p>@message.Content</p>
+                </article>
+            }
+        </div>
+
+        @if (_unavailableReason is not null)
+        {
+            <p class="notice">@_unavailableReason</p>
+        }
+
+        <label class="full-width">
+            @Language.Strings.YourMessage
+            <textarea @bind="_draft" rows="3"></textarea>
+        </label>
+
+        <div class="form-grid">
+            <label>
+                @Language.Strings.FieldRole
+                <select @bind="_role">
+                    @foreach (var value in Enum.GetValues<AIRole>())
+                    {
+                        <option value="@value">@EnumLabels.Label(value, _persian)</option>
+                    }
+                </select>
+            </label>
+            <label>
+                @Language.Strings.FieldSensitivity
+                <select @bind="_sensitivity">
+                    @foreach (var value in Enum.GetValues<DataSensitivity>())
+                    {
+                        <option value="@value">@EnumLabels.Label(value, _persian)</option>
+                    }
+                </select>
+            </label>
+        </div>
+
+        <button class="primary" @onclick="SendAsync" disabled="@_busy">
+            @(_busy ? Language.Strings.Thinking : Language.Strings.Send)
+        </button>
+    </section>
+}
+
+@if (_error is not null)
+{
+    <p class="error" role="alert">@_error</p>
+}
+
+@code {
+    private IReadOnlyList<AIConversationDto> _conversations = [];
+    private AIConversationDetailDto? _active;
+    private AIStatusDto? _status;
+    private UserPreferences _preferences = UserPreferences.Default;
+
+    private string _newTitle = string.Empty;
+    private AIContextType _newContext = AIContextType.Global;
+
+    private string _draft = string.Empty;
+    private AIRole _role = AIRole.DecisionAnalyst;
+    private DataSensitivity _sensitivity = DataSensitivity.Internal;
+    private string? _unavailableReason;
+
+    private bool _busy;
+    private bool _persian;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Language.EnsureLoadedAsync();
+        _persian = Language.IsPersianLanguage;
+
+        _preferences = await Preferences.GetAsync();
+        _status = await AssistantService.GetStatusAsync();
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        var result = await AssistantService.ListAsync();
+
+        if (result.Succeeded)
+        {
+            _conversations = result.Value ?? [];
+        }
+        else
+        {
+            _error = result.ErrorMessage;
+        }
+    }
+
+    private async Task CreateConversationAsync()
+    {
+        _error = null;
+
+        if (string.IsNullOrWhiteSpace(_newTitle))
+        {
+            _error = Language.Strings.ErrorConversationTitleRequired;
+            return;
+        }
+
+        _busy = true;
+
+        try
+        {
+            var result = await AssistantService.CreateAsync(new CreateConversationRequest(
+                _newTitle,
+                _newContext,
+                DecisionId: null));
+
+            if (!result.Succeeded)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _newTitle = string.Empty;
+
+            await ReloadAsync();
+            await SelectAsync(result.Value);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task SelectAsync(Guid id)
+    {
+        _unavailableReason = null;
+
+        var result = await AssistantService.GetAsync(id);
+
+        if (result.Succeeded)
+        {
+            _active = result.Value;
+        }
+        else
+        {
+            _error = result.ErrorMessage;
+        }
+    }
+
+    private async Task SendAsync()
+    {
+        _error = null;
+        _unavailableReason = null;
+
+        if (_active is null)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_draft))
+        {
+            _error = Language.Strings.ErrorWriteSomething;
+            return;
+        }
+
+        _busy = true;
+
+        try
+        {
+            var result = await AssistantService.SendMessageAsync(
+                _active.Id,
+                new SendMessageRequest(_draft, _role, _sensitivity));
+
+            if (!result.Succeeded)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _draft = string.Empty;
+            _unavailableReason = result.Value?.UnavailableReason;
+
+            await SelectAsync(_active.Id);
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

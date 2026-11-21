@@ -1,0 +1,175 @@
+@page "/decisions"
+@using DecisionSimulator.Application.Common
+@using DecisionSimulator.Application.Features.Decisions
+@using DecisionSimulator.Domain.Enums
+@using DecisionSimulator.Web.Localization
+@using DecisionSimulator.Web.Services
+@inject DecisionService DecisionService
+@inject DisplayFormatter Formatter
+@inject IUserPreferencesAccessor Preferences
+@inject NavigationManager Navigation
+@inject LanguageService Language
+
+<PageTitle>@Language.Strings.DecisionsTitle</PageTitle>
+
+<h1>@Language.Strings.DecisionsTitle</h1>
+
+<p class="lede">
+    @Language.Strings.DecisionsLede
+</p>
+
+<section class="panel">
+    <h2>@Language.Strings.NewDecision</h2>
+
+    <div class="form-grid">
+        <label>
+            @Language.Strings.FieldTitle
+            <input @bind="_title" placeholder="@Language.Strings.TitlePlaceholder" />
+        </label>
+
+        <label>
+            @Language.Strings.FieldCategory
+            <select @bind="_category">
+                @foreach (var value in Enum.GetValues<DecisionCategory>())
+                {
+                    <option value="@value">@EnumLabels.Label(value, _persian)</option>
+                }
+            </select>
+        </label>
+
+        <label>
+            @Language.Strings.FieldImportance
+            <select @bind="_importance">
+                @foreach (var value in Enum.GetValues<ImportanceLevel>())
+                {
+                    <option value="@value">@EnumLabels.Label(value, _persian)</option>
+                }
+            </select>
+        </label>
+
+        <label>
+            @Language.Strings.FieldHorizon
+            <select @bind="_horizon">
+                @foreach (var value in Enum.GetValues<DecisionHorizon>())
+                {
+                    <option value="@value">@EnumLabels.Label(value, _persian)</option>
+                }
+            </select>
+        </label>
+    </div>
+
+    <label class="full-width">
+        @Language.Strings.FieldDescription
+        <textarea @bind="_description" rows="2"></textarea>
+    </label>
+
+    <button class="primary" @onclick="CreateAsync" disabled="@_busy">
+        @(_busy ? Language.Strings.Creating : Language.Strings.CreateDecision)
+    </button>
+
+    @if (_error is not null)
+    {
+        <p class="error" role="alert">@_error</p>
+    }
+</section>
+
+<section>
+    <h2>@Language.Strings.AllDecisions</h2>
+
+    @if (_decisions.Count == 0)
+    {
+        <p class="muted">@Language.Strings.NothingRecorded</p>
+    }
+    else
+    {
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>@Language.Strings.ColTitle</th>
+                    <th>@Language.Strings.ColCategory</th>
+                    <th>@Language.Strings.ColStatus</th>
+                    <th>@Language.Strings.ColImportance</th>
+                    <th>@Language.Strings.ColAlternatives</th>
+                    <th>@Language.Strings.ColScenarios</th>
+                    <th>@Language.Strings.ColUpdated</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var decision in _decisions)
+                {
+                    <tr>
+                        <td><a href="@($"/decisions/{decision.Id}")">@decision.Title</a></td>
+                        <td>@EnumLabels.Label(decision.Category, _persian)</td>
+                        <td><span class="pill">@EnumLabels.Label(decision.Status, _persian)</span></td>
+                        <td>@EnumLabels.Label(decision.Importance, _persian)</td>
+                        <td>@decision.AlternativeCount</td>
+                        <td>@decision.ScenarioCount</td>
+                        <td>@Formatter.FormatDate(decision.UpdatedAtUtc, _preferences.CalendarSystem, _preferences.TimeZoneId)</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</section>
+
+@code {
+    private IReadOnlyList<DecisionSummaryDto> _decisions = [];
+    private UserPreferences _preferences = UserPreferences.Default;
+
+    private string _title = string.Empty;
+    private string? _description;
+    private DecisionCategory _category = DecisionCategory.Career;
+    private ImportanceLevel _importance = ImportanceLevel.Moderate;
+    private DecisionHorizon _horizon = DecisionHorizon.MediumTerm;
+
+    private bool _busy;
+    private bool _persian;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Language.EnsureLoadedAsync();
+        _persian = Language.IsPersianLanguage;
+
+        _preferences = await Preferences.GetAsync();
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync() => _decisions = await DecisionService.ListAsync();
+
+    private async Task CreateAsync()
+    {
+        _error = null;
+
+        if (string.IsNullOrWhiteSpace(_title))
+        {
+            _error = Language.Strings.ErrorTitleRequired;
+            return;
+        }
+
+        _busy = true;
+
+        try
+        {
+            var result = await DecisionService.CreateAsync(new CreateDecisionRequest(
+                _title,
+                _category,
+                _description,
+                _importance,
+                _horizon,
+                RiskTolerance.Moderate));
+
+            if (!result.Succeeded)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            Navigation.NavigateTo($"/decisions/{result.Value}");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

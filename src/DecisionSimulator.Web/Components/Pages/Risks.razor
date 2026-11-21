@@ -1,0 +1,226 @@
+@page "/risks"
+@using DecisionSimulator.Application.Common
+@using DecisionSimulator.Application.Features.Risks
+@using DecisionSimulator.Domain.Enums
+@using DecisionSimulator.Web.Localization
+@using DecisionSimulator.Web.Services
+@inject RiskFactorService RiskService
+@inject DisplayFormatter Formatter
+@inject IUserPreferencesAccessor Preferences
+@inject LanguageService Language
+
+<PageTitle>@Language.Strings.RisksTitle</PageTitle>
+
+<h1>@Language.Strings.RisksTitle</h1>
+
+<p class="lede">
+    @Language.Strings.RisksLede
+</p>
+
+<section class="panel">
+    <h2>@Language.Strings.NewRiskFactor</h2>
+
+    <div class="form-grid">
+        <label>
+            @Language.Strings.FieldName
+            <input @bind="_name" placeholder="@Language.Strings.RiskNamePlaceholder" />
+        </label>
+
+        <label>
+            @Language.Strings.FieldCategory
+            <select @bind="_category">
+                @foreach (var value in Enum.GetValues<RiskCategory>())
+                {
+                    <option value="@value">@EnumLabels.Label(value, _persian)</option>
+                }
+            </select>
+        </label>
+
+        <label>
+            @Language.Strings.FieldScope
+            <select @bind="_scope">
+                @foreach (var value in Enum.GetValues<GeographicScope>())
+                {
+                    <option value="@value">@EnumLabels.Label(value, _persian)</option>
+                }
+            </select>
+        </label>
+
+        <label>
+            @Language.Strings.FieldDirection
+            <select @bind="_direction">
+                @foreach (var value in Enum.GetValues<ImpactDirection>())
+                {
+                    <option value="@value">@EnumLabels.Label(value, _persian)</option>
+                }
+            </select>
+        </label>
+
+        <label>
+            @Language.Strings.FieldLikelihood
+            <select @bind="_likelihood">
+                @foreach (var value in Enum.GetValues<ConfidenceLevel>())
+                {
+                    <option value="@value">@EnumLabels.Label(value, _persian)</option>
+                }
+            </select>
+        </label>
+
+        <label>
+            @Language.Strings.FieldConfidence
+            <select @bind="_confidence">
+                @foreach (var value in Enum.GetValues<ConfidenceLevel>())
+                {
+                    <option value="@value">@EnumLabels.Label(value, _persian)</option>
+                }
+            </select>
+        </label>
+    </div>
+
+    <label class="full-width">
+        @Language.Strings.FieldDescription
+        <textarea @bind="_description" rows="2"></textarea>
+    </label>
+
+    <label class="full-width">
+        @Language.Strings.FieldSourceReference
+        <input @bind="_sourceReference" placeholder="@Language.Strings.SourceReferencePlaceholderRisk" />
+    </label>
+
+    <button class="primary" @onclick="CreateAsync" disabled="@_busy">
+        @(_busy ? Language.Strings.Saving : Language.Strings.AddRiskFactor)
+    </button>
+
+    @if (_error is not null)
+    {
+        <p class="error" role="alert">@_error</p>
+    }
+</section>
+
+<section>
+    <h2>@Language.Strings.RecordedRisks</h2>
+
+    @if (_risks.Count == 0)
+    {
+        <p class="muted">@Language.Strings.NoRisks</p>
+    }
+    else
+    {
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>@Language.Strings.FieldName</th>
+                    <th>@Language.Strings.ColCategory</th>
+                    <th>@Language.Strings.ColScope</th>
+                    <th>@Language.Strings.ColDirection</th>
+                    <th>@Language.Strings.ColLikelihood</th>
+                    <th>@Language.Strings.ColConfidence</th>
+                    <th>@Language.Strings.ColVerified</th>
+                    <th>@Language.Strings.ColActive</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var risk in _risks)
+                {
+                    <tr>
+                        <td>@risk.Name</td>
+                        <td>@EnumLabels.Label(risk.Category, _persian)</td>
+                        <td>@EnumLabels.Label(risk.GeographicScope, _persian)</td>
+                        <td>@EnumLabels.Label(risk.ImpactDirection, _persian)</td>
+                        <td>@EnumLabels.Label(risk.LikelihoodAssessment, _persian)</td>
+                        <td>@EnumLabels.Label(risk.Confidence, _persian)</td>
+                        <td>
+                            @(risk.LastVerifiedAtUtc is { } verified
+                                ? Formatter.FormatDate(verified, _preferences.CalendarSystem, _preferences.TimeZoneId)
+                                : Language.Strings.Never)
+                        </td>
+                        <td>@(risk.IsActive ? Language.Strings.Yes : Language.Strings.No)</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</section>
+
+@code {
+    private IReadOnlyList<RiskFactorDto> _risks = [];
+    private UserPreferences _preferences = UserPreferences.Default;
+
+    private string _name = string.Empty;
+    private string? _description;
+    private string? _sourceReference;
+    private RiskCategory _category = RiskCategory.Economic;
+    private GeographicScope _scope = GeographicScope.Country;
+    private ImpactDirection _direction = ImpactDirection.Negative;
+    private ConfidenceLevel _likelihood = ConfidenceLevel.Unknown;
+    private ConfidenceLevel _confidence = ConfidenceLevel.Unknown;
+
+    private bool _busy;
+    private bool _persian;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Language.EnsureLoadedAsync();
+        _persian = Language.IsPersianLanguage;
+
+        _preferences = await Preferences.GetAsync();
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        var result = await RiskService.ListAsync();
+
+        if (result.Succeeded)
+        {
+            _risks = result.Value ?? [];
+        }
+        else
+        {
+            _error = result.ErrorMessage;
+        }
+    }
+
+    private async Task CreateAsync()
+    {
+        _error = null;
+
+        if (string.IsNullOrWhiteSpace(_name))
+        {
+            _error = Language.Strings.ErrorRiskNameRequired;
+            return;
+        }
+
+        _busy = true;
+
+        try
+        {
+            var result = await RiskService.CreateAsync(new CreateRiskFactorRequest(
+                _name,
+                _category,
+                _scope,
+                _direction,
+                _description,
+                LikelihoodAssessment: _likelihood,
+                Confidence: _confidence,
+                SourceReference: _sourceReference));
+
+            if (!result.Succeeded)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _name = string.Empty;
+            _description = null;
+            _sourceReference = null;
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

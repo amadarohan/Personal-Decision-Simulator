@@ -1,0 +1,86 @@
+@inherits LayoutComponentBase
+@inject LanguageService Language
+@inject NavigationManager Navigation
+
+<div class="app-shell">
+    <aside class="app-sidebar">
+        <div class="brand">
+            <span class="brand-mark">◇</span>
+            <span class="brand-name">@Language.Strings.BrandName</span>
+        </div>
+
+        <nav class="app-nav">
+            <NavLink href="/" Match="NavLinkMatch.All">@Language.Strings.NavOverview</NavLink>
+            <NavLink href="/decisions">@Language.Strings.NavDecisions</NavLink>
+            <NavLink href="/scenarios">@Language.Strings.NavScenarios</NavLink>
+            <NavLink href="/simulations">@Language.Strings.NavSimulations</NavLink>
+            <NavLink href="/risks">@Language.Strings.NavRisks</NavLink>
+            <NavLink href="/data">@Language.Strings.NavData</NavLink>
+            <NavLink href="/assistant">@Language.Strings.NavAssistant</NavLink>
+            <NavLink href="/settings">@Language.Strings.NavSettings</NavLink>
+        </nav>
+
+        <div class="sidebar-footer">
+            <div class="language-switch">
+                <span class="language-label">@Language.Strings.SwitchLanguage</span>
+                <div class="language-options">
+                    <button class="link @(Language.CurrentTag == LanguageService.PersianTag ? "active" : null)"
+                            @onclick="() => SwitchAsync(LanguageService.PersianTag)"
+                            disabled="@_switching">
+                        فارسی
+                    </button>
+                    <span class="language-separator">/</span>
+                    <button class="link @(Language.CurrentTag == LanguageService.EnglishTag ? "active" : null)"
+                            @onclick="() => SwitchAsync(LanguageService.EnglishTag)"
+                            disabled="@_switching">
+                        English
+                    </button>
+                </div>
+            </div>
+
+            <p class="disclaimer">
+                @Language.Strings.Disclaimer
+            </p>
+        </div>
+    </aside>
+
+    <main class="app-main">
+        @Body
+    </main>
+</div>
+
+@code {
+    private bool _switching;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Language.EnsureLoadedAsync();
+    }
+
+    private async Task SwitchAsync(string tag)
+    {
+        if (Language.CurrentTag == tag)
+        {
+            return;
+        }
+
+        _switching = true;
+
+        try
+        {
+            if (await Language.SetLanguageAsync(tag))
+            {
+                // A full browser reload is deliberate: every component re-renders
+                // from one catalogue, so no screen is left half-translated.
+                // Navigation.Refresh() is not enough here because it only
+                // re-renders the current page inside the existing circuit, which
+                // leaves the already-rendered page body in the old language.
+                Navigation.NavigateTo(Navigation.Uri, forceLoad: true);
+            }
+        }
+        finally
+        {
+            _switching = false;
+        }
+    }
+}

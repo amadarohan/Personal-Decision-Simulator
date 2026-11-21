@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>DecisionSimulator.Domain</RootNamespace>
+    <AssemblyName>DecisionSimulator.Domain</AssemblyName>
+  </PropertyGroup>
+
+</Project>

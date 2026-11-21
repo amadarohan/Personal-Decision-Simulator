@@ -1,0 +1,485 @@
+@page "/scenarios/{Id:guid}"
+@using DecisionSimulator.Application.Common
+@using DecisionSimulator.Application.Features.Scenarios
+@using DecisionSimulator.Application.Features.Simulations
+@using DecisionSimulator.Application.Features.Variables
+@using DecisionSimulator.Domain.Enums
+@using DecisionSimulator.Web.Localization
+@using DecisionSimulator.Web.Services
+@inject ScenarioService Scenarios
+@inject VariableDefinitionService Variables
+@inject SimulationService Simulations
+@inject DisplayFormatter Formatter
+@inject IUserPreferencesAccessor Preferences
+@inject NavigationManager Navigation
+@inject LanguageService Language
+
+<PageTitle>@(_scenario?.Name ?? Language.Strings.ScenarioFallbackTitle)</PageTitle>
+
+@if (_loading)
+{
+    <p class="muted">@Language.Strings.Loading</p>
+}
+else if (_scenario is null)
+{
+    <p class="error" role="alert">@_error</p>
+}
+else
+{
+    <header class="page-header">
+        <div>
+            <h1>@_scenario.Name</h1>
+            <p class="muted">
+                @EnumLabels.Label(_scenario.Type, _persian) · @_scenario.TimeHorizonMonths @Language.Strings.Months · @Language.Strings.AssumptionSet
+                v@_scenario.AssumptionSetVersion
+            </p>
+        </div>
+        <span class="pill large">@EnumLabels.Label(_scenario.Status, _persian)</span>
+    </header>
+
+    @if (!string.IsNullOrWhiteSpace(_scenario.Description))
+    {
+        <p class="lede">@_scenario.Description</p>
+    }
+
+    <p class="notice">
+        @Language.Strings.AssumptionsNotice
+    </p>
+
+    @if (_error is not null)
+    {
+        <p class="error" role="alert">@_error</p>
+    }
+
+    @if (_statusMessage is not null)
+    {
+        <p class="success" role="status">@_statusMessage</p>
+    }
+
+    <section class="panel">
+        <h2>@Language.Strings.Assumptions</h2>
+
+        @if (_scenario.Variables.Count == 0)
+        {
+            <p class="muted">
+                @Language.Strings.NoAssumptions
+            </p>
+        }
+        else
+        {
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>@Language.Strings.ColVariable</th>
+                        <th>@Language.Strings.ColValue</th>
+                        <th>@Language.Strings.ColDistribution</th>
+                        <th>@Language.Strings.ColRange</th>
+                        <th>@Language.Strings.ColConfidence</th>
+                        <th>@Language.Strings.ColSource</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var variable in _scenario.Variables)
+                    {
+                        <tr>
+                            <td>
+                                <strong>@variable.VariableName</strong>
+                                <div class="muted small">@variable.VariableKey</div>
+                            </td>
+                            <td>@FormatValue(variable.Value, variable.Unit)</td>
+                            <td>@EnumLabels.Label(variable.DistributionType, _persian)</td>
+                            <td>
+                                @if (variable.MinimumValue is { } low && variable.MaximumValue is { } high)
+                                {
+                                    <span>@FormatValue(low, variable.Unit) – @FormatValue(high, variable.Unit)</span>
+                                }
+                                else if (variable.StandardDeviation is { } sigma)
+                                {
+                                    <span>σ @FormatValue(sigma, variable.Unit)</span>
+                                }
+                                else
+                                {
+                                    <span class="muted">@Language.Strings.Dash</span>
+                                }
+                            </td>
+                            <td>@EnumLabels.Label(variable.Confidence, _persian)</td>
+                            <td>
+                                @EnumLabels.Label(variable.SourceType, _persian)
+                                @if (!string.IsNullOrWhiteSpace(variable.SourceReference))
+                                {
+                                    <div class="muted small">@variable.SourceReference</div>
+                                }
+                            </td>
+                            <td>
+                                <button class="link" @onclick="() => EditVariable(variable)" disabled="@_busy">
+                                    @Language.Strings.Edit
+                                </button>
+                                <button class="link danger" @onclick="() => RemoveVariableAsync(variable)" disabled="@_busy">
+                                    @Language.Strings.Remove
+                                </button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </section>
+
+    <section class="panel">
+        <h2>@(_editingVariableId is null ? Language.Strings.AddAssumption : Language.Strings.EditAssumption)</h2>
+
+        @if (_definitions.Count == 0)
+        {
+            <p class="muted">
+                @Language.Strings.NoVariableDefinitions
+                <a href="/data">@Language.Strings.DataPageLink</a>
+            </p>
+        }
+        else
+        {
+            <div class="form-grid">
+                <label>
+                    @Language.Strings.FieldVariable
+                    <select @bind="_selectedDefinitionId" disabled="@(_editingVariableId is not null)">
+                        <option value="@Guid.Empty">@Language.Strings.SelectVariable</option>
+                        @foreach (var definition in _definitions)
+                        {
+                            <option value="@definition.Id">
+                                @definition.Name (@definition.Unit)
+                            </option>
+                        }
+                    </select>
+                </label>
+
+                <label>
+                    @Language.Strings.FieldValue
+                    <input type="number" step="any" @bind="_value" />
+                </label>
+
+                <label>
+                    @Language.Strings.FieldDistribution
+                    <select @bind="_distributionType">
+                        @foreach (var value in Enum.GetValues<DistributionType>())
+                        {
+                            <option value="@value">@EnumLabels.Label(value, _persian)</option>
+                        }
+                    </select>
+                </label>
+
+                <label>
+                    @Language.Strings.FieldConfidence
+                    <select @bind="_confidence">
+                        @foreach (var value in Enum.GetValues<ConfidenceLevel>())
+                        {
+                            <option value="@value">@EnumLabels.Label(value, _persian)</option>
+                        }
+                    </select>
+                </label>
+
+                <label>
+                    @Language.Strings.FieldSource
+                    <select @bind="_sourceType">
+                        @foreach (var value in Enum.GetValues<SourceType>())
+                        {
+                            <option value="@value">@EnumLabels.Label(value, _persian)</option>
+                        }
+                    </select>
+                </label>
+
+                <label>
+                    @Language.Strings.FieldSourceReference
+                    <input @bind="_sourceReference" placeholder="@Language.Strings.SourceReferencePlaceholder" />
+                </label>
+
+                @if (NeedsRange)
+                {
+                    <label>
+                        @Language.Strings.FieldMinimum
+                        <input type="number" step="any" @bind="_minimumValue" />
+                    </label>
+
+                    <label>
+                        @Language.Strings.FieldMaximum
+                        <input type="number" step="any" @bind="_maximumValue" />
+                    </label>
+                }
+
+                @if (NeedsSigma)
+                {
+                    <label>
+                        @Language.Strings.FieldStandardDeviation
+                        <input type="number" step="any" @bind="_standardDeviation" />
+                    </label>
+                }
+            </div>
+
+            @if (NeedsRange || NeedsSigma)
+            {
+                <p class="muted small">
+                    @EnumLabels.Label(_distributionType, _persian)
+                    @(NeedsRange ? Language.Strings.DistributionNeedsRange : Language.Strings.DistributionNeedsSigma)
+                </p>
+            }
+
+            <button class="primary" @onclick="SaveVariableAsync" disabled="@_busy">
+                @(_busy ? Language.Strings.Saving : _editingVariableId is null ? Language.Strings.AddAssumption : Language.Strings.SaveAssumption)
+            </button>
+
+            @if (_editingVariableId is not null)
+            {
+                <button class="link" @onclick="CancelEdit" disabled="@_busy">@Language.Strings.Cancel</button>
+            }
+        }
+    </section>
+
+    <section class="panel">
+        <h2>@Language.Strings.RunHistory</h2>
+
+        @if (_scenario.Runs.Count == 0)
+        {
+            <p class="muted">@Language.Strings.NotRunYet</p>
+        }
+        else
+        {
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>@Language.Strings.ColStarted</th>
+                        <th>@Language.Strings.ColType</th>
+                        <th>@Language.Strings.ColStatus</th>
+                        <th>@Language.Strings.ColIterations</th>
+                        <th>@Language.Strings.ColSeed</th>
+                        <th>@Language.Strings.ColAssumptions</th>
+                        <th>@Language.Strings.ColDetail</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var run in _scenario.Runs.OrderByDescending(r => r.StartedAtUtc))
+                    {
+                        <tr>
+                            <td>@Formatter.FormatDate(run.StartedAtUtc, _preferences.CalendarSystem, _preferences.TimeZoneId)</td>
+                            <td>@EnumLabels.Label(run.RunType, _persian)</td>
+                            <td><span class="pill">@EnumLabels.Label(run.Status, _persian)</span></td>
+                            <td>@run.IterationCount.ToString("N0")</td>
+                            <td>@(run.RandomSeed?.ToString() ?? Language.Strings.Dash)</td>
+                            <td>v@run.AssumptionSetVersion</td>
+                            <td>
+                                @if (run.ErrorMessage is not null)
+                                {
+                                    <span class="error small">@run.ErrorMessage</span>
+                                }
+                                else
+                                {
+                                    <span class="muted">@Language.Strings.Dash</span>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+
+        <button class="primary" @onclick="GoToSimulations">
+            @Language.Strings.RunThisScenario
+        </button>
+    </section>
+}
+
+@code {
+    [Parameter]
+    public Guid Id { get; set; }
+
+    private ScenarioDetailDto? _scenario;
+    private IReadOnlyList<VariableDefinitionDto> _definitions = [];
+    private UserPreferences _preferences = UserPreferences.Default;
+
+    private bool _loading = true;
+    private bool _busy;
+    private bool _persian;
+    private string? _error;
+    private string? _statusMessage;
+
+    private Guid? _editingVariableId;
+    private Guid _selectedDefinitionId = Guid.Empty;
+    private decimal _value;
+    private DistributionType _distributionType = DistributionType.Fixed;
+    private ConfidenceLevel _confidence = ConfidenceLevel.Unknown;
+    private SourceType _sourceType = SourceType.UserInput;
+    private string? _sourceReference;
+    private decimal? _minimumValue;
+    private decimal? _maximumValue;
+    private decimal? _standardDeviation;
+
+    private bool NeedsRange =>
+        _distributionType is DistributionType.Uniform or DistributionType.Triangular;
+
+    private bool NeedsSigma =>
+        _distributionType is DistributionType.Normal or DistributionType.LogNormal;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await Language.EnsureLoadedAsync();
+        _persian = Language.IsPersianLanguage;
+
+        _preferences = await Preferences.GetAsync();
+        await ReloadAsync();
+        _loading = false;
+    }
+
+    private async Task ReloadAsync()
+    {
+        var scenarioResult = await Scenarios.GetAsync(Id);
+
+        if (!scenarioResult.Succeeded)
+        {
+            _error = scenarioResult.ErrorMessage;
+            _scenario = null;
+            return;
+        }
+
+        _scenario = scenarioResult.Value;
+
+        var definitionsResult = await Variables.ListAsync();
+        _definitions = definitionsResult.Value ?? [];
+    }
+
+    private void EditVariable(ScenarioVariableDto variable)
+    {
+        _error = null;
+        _statusMessage = null;
+
+        _editingVariableId = variable.Id;
+        _selectedDefinitionId = variable.VariableDefinitionId;
+        _value = variable.Value;
+        _distributionType = variable.DistributionType;
+        _confidence = variable.Confidence;
+        _sourceType = variable.SourceType;
+        _sourceReference = variable.SourceReference;
+        _minimumValue = variable.MinimumValue;
+        _maximumValue = variable.MaximumValue;
+        _standardDeviation = variable.StandardDeviation;
+    }
+
+    private void GoToSimulations()
+    {
+        Navigation.NavigateTo($"/simulations?scenario={Id}");
+    }
+
+    private void CancelEdit()
+    {
+        _editingVariableId = null;
+        _selectedDefinitionId = Guid.Empty;
+        _value = 0m;
+        _distributionType = DistributionType.Fixed;
+        _confidence = ConfidenceLevel.Unknown;
+        _sourceType = SourceType.UserInput;
+        _sourceReference = null;
+        _minimumValue = null;
+        _maximumValue = null;
+        _standardDeviation = null;
+    }
+
+    private async Task SaveVariableAsync()
+    {
+        _error = null;
+        _statusMessage = null;
+
+        if (_selectedDefinitionId == Guid.Empty)
+        {
+            _error = Language.Strings.ErrorChooseVariable;
+            return;
+        }
+
+        if (NeedsRange && (_minimumValue is null || _maximumValue is null))
+        {
+            _error = $"{EnumLabels.Label(_distributionType, _persian)} {Language.Strings.ErrorRangeRequired}";
+            return;
+        }
+
+        if (NeedsSigma && _standardDeviation is null)
+        {
+            _error = $"{EnumLabels.Label(_distributionType, _persian)} {Language.Strings.ErrorSigmaRequired}";
+            return;
+        }
+
+        _busy = true;
+
+        try
+        {
+            var result = await Scenarios.SetVariableAsync(Id, new SetScenarioVariableRequest(
+                _selectedDefinitionId,
+                _value,
+                _distributionType,
+                NeedsRange ? _minimumValue : null,
+                NeedsRange ? _maximumValue : null,
+                NeedsSigma ? _standardDeviation : null,
+                _confidence,
+                _sourceType,
+                string.IsNullOrWhiteSpace(_sourceReference) ? null : _sourceReference.Trim()));
+
+            if (!result.Succeeded)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _statusMessage = Language.Strings.AssumptionSaved;
+            CancelEdit();
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task RemoveVariableAsync(ScenarioVariableDto variable)
+    {
+        _error = null;
+        _statusMessage = null;
+        _busy = true;
+
+        try
+        {
+            var result = await Scenarios.RemoveVariableAsync(Id, variable.Id);
+
+            if (!result.Succeeded)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            if (_editingVariableId == variable.Id)
+            {
+                CancelEdit();
+            }
+
+            _statusMessage = $"{Language.Strings.RemovedPrefix} '{variable.VariableName}'.";
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    /// <summary>
+    /// Formats a value using its unit. A percentage is stored as a whole number
+    /// (12 means 12%), so it is not multiplied again here.
+    /// </summary>
+    private string FormatValue(decimal value, string unit)
+    {
+        if (unit.Contains('%', StringComparison.Ordinal))
+        {
+            return $"{value.ToString("N2", System.Globalization.CultureInfo.InvariantCulture)}%";
+        }
+
+        if (unit.Contains("month", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"{value.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} {unit}";
+        }
+
+        return $"{value.ToString("N2", System.Globalization.CultureInfo.InvariantCulture)} {unit}";
+    }
+}

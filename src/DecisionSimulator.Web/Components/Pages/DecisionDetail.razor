@@ -1,0 +1,266 @@
+@page "/decisions/{Id:guid}"
+@using DecisionSimulator.Application.Common
+@using DecisionSimulator.Application.Features.Decisions
+@using DecisionSimulator.Domain.Enums
+@using DecisionSimulator.Web.Localization
+@using DecisionSimulator.Web.Services
+@inject DecisionService Decisions
+@inject DisplayFormatter Formatter
+@inject IUserPreferencesAccessor Preferences
+@inject LanguageService Language
+
+<PageTitle>@(_decision?.Title ?? Language.Strings.DecisionFallbackTitle)</PageTitle>
+
+@if (_loading)
+{
+    <p class="muted">@Language.Strings.Loading</p>
+}
+else if (_decision is null)
+{
+    <p class="error" role="alert">@_error</p>
+}
+else
+{
+    <header class="page-header">
+        <div>
+            <h1>@_decision.Title</h1>
+            <p class="muted">
+                @EnumLabels.Label(_decision.Category, _persian) · @EnumLabels.Label(_decision.Horizon, _persian) · @Language.Strings.Created
+                @Formatter.FormatDate(_decision.CreatedAtUtc, _preferences.CalendarSystem, _preferences.TimeZoneId)
+            </p>
+        </div>
+        <span class="pill large">@EnumLabels.Label(_decision.Status, _persian)</span>
+    </header>
+
+    @if (!string.IsNullOrWhiteSpace(_decision.Description))
+    {
+        <p class="lede">@_decision.Description</p>
+    }
+
+    <section class="panel">
+        <h2>@Language.Strings.Alternatives</h2>
+
+        @if (_decision.Alternatives.Count == 0)
+        {
+            <p class="muted">
+                @Language.Strings.NoAlternatives
+            </p>
+        }
+        else
+        {
+            <ul class="card-list">
+                @foreach (var alternative in _decision.Alternatives)
+                {
+                    <li class="card">
+                        <div class="card-header">
+                            <strong>@alternative.Name</strong>
+                            @if (alternative.IsBaseline)
+                            {
+                                <span class="pill">@Language.Strings.Baseline</span>
+                            }
+                        </div>
+
+                        @if (!string.IsNullOrWhiteSpace(alternative.Description))
+                        {
+                            <p>@alternative.Description</p>
+                        }
+
+                        <dl class="metric-row">
+                            @if (alternative.EstimatedInitialCost is { } initial)
+                            {
+                                <div>
+                                    <dt>@Language.Strings.InitialCost</dt>
+                                    <dd>@Formatter.FormatMoney(initial, _preferences.DefaultCurrencyCode, _preferences.CurrencyUnitConvention, CurrencyUnitLabel)</dd>
+                                </div>
+                            }
+                            @if (alternative.EstimatedRecurringCost is { } recurring)
+                            {
+                                <div>
+                                    <dt>@Language.Strings.RecurringCost</dt>
+                                    <dd>@Formatter.FormatMoney(recurring, _preferences.DefaultCurrencyCode, _preferences.CurrencyUnitConvention, CurrencyUnitLabel)</dd>
+                                </div>
+                            }
+                        </dl>
+                    </li>
+                }
+            </ul>
+        }
+
+        <div class="form-grid">
+            <label>
+                @Language.Strings.FieldName
+                <input @bind="_alternativeName" placeholder="@Language.Strings.AlternativeNamePlaceholder" />
+            </label>
+            <label>
+                @Language.Strings.InitialCost
+                <input type="number" @bind="_alternativeInitialCost" />
+            </label>
+            <label>
+                @Language.Strings.RecurringCost
+                <input type="number" @bind="_alternativeRecurringCost" />
+            </label>
+        </div>
+
+        <button class="primary" @onclick="AddAlternativeAsync" disabled="@_busy">
+            @Language.Strings.AddAlternative
+        </button>
+
+        @if (_error is not null)
+        {
+            <p class="error" role="alert">@_error</p>
+        }
+    </section>
+
+    <section class="panel">
+        <h2>@Language.Strings.ScenariosHeading</h2>
+
+        @if (_decision.Scenarios.Count == 0)
+        {
+            <p class="muted">
+                @Language.Strings.NoScenarios
+            </p>
+        }
+        else
+        {
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>@Language.Strings.FieldName</th>
+                        <th>@Language.Strings.ColType</th>
+                        <th>@Language.Strings.ColHorizon</th>
+                        <th>@Language.Strings.ColVariables</th>
+                        <th>@Language.Strings.ColRuns</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var scenario in _decision.Scenarios)
+                    {
+                        <tr>
+                            <td>
+                                <a href="@($"/scenarios/{scenario.Id}")">@scenario.Name</a>
+                            </td>
+                            <td>@EnumLabels.Label(scenario.Type, _persian)</td>
+                            <td>@scenario.TimeHorizonMonths @Language.Strings.Months</td>
+                            <td>@scenario.VariableCount</td>
+                            <td>@scenario.RunCount</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </section>
+
+    <section class="panel">
+        <h2>@Language.Strings.Reviews</h2>
+
+        @if (_decision.Reviews.Count == 0)
+        {
+            <p class="muted">
+                @Language.Strings.NoReviews
+            </p>
+        }
+        else
+        {
+            <ul class="card-list">
+                @foreach (var review in _decision.Reviews)
+                {
+                    <li class="card">
+                        <div class="card-header">
+                            <strong>@Formatter.FormatDate(review.ReviewDate, _preferences.CalendarSystem, _preferences.TimeZoneId)</strong>
+                        </div>
+                        <p>@review.ActualOutcome</p>
+                        @if (!string.IsNullOrWhiteSpace(review.LessonsLearned))
+                        {
+                            <p class="muted">@Language.Strings.Lesson @review.LessonsLearned</p>
+                        }
+                    </li>
+                }
+            </ul>
+        }
+    </section>
+}
+
+@code {
+    [Parameter]
+    public Guid Id { get; set; }
+
+    private DecisionDetailDto? _decision;
+    private UserPreferences _preferences = UserPreferences.Default;
+    private bool _loading = true;
+    private bool _busy;
+    private bool _persian;
+    private string? _error;
+
+    private string _alternativeName = string.Empty;
+    private decimal? _alternativeInitialCost;
+    private decimal? _alternativeRecurringCost;
+
+    /// <summary>
+    /// The translated unit name for money. The formatter is a singleton and
+    /// cannot read the language, so the label is resolved here.
+    /// </summary>
+    private string CurrencyUnitLabel =>
+        _preferences.CurrencyUnitConvention == CurrencyUnitConvention.Toman
+            ? Language.Strings.CurrencyToman
+            : Language.Strings.CurrencyRial;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await Language.EnsureLoadedAsync();
+        _persian = Language.IsPersianLanguage;
+
+        _preferences = await Preferences.GetAsync();
+        await ReloadAsync();
+        _loading = false;
+    }
+
+    private async Task ReloadAsync()
+    {
+        var result = await Decisions.GetAsync(Id);
+
+        if (result.Succeeded)
+        {
+            _decision = result.Value;
+        }
+        else
+        {
+            _error = result.ErrorMessage;
+        }
+    }
+
+    private async Task AddAlternativeAsync()
+    {
+        _error = null;
+
+        if (string.IsNullOrWhiteSpace(_alternativeName))
+        {
+            _error = Language.Strings.ErrorAlternativeNameRequired;
+            return;
+        }
+
+        _busy = true;
+
+        try
+        {
+            var result = await Decisions.AddAlternativeAsync(Id, new CreateAlternativeRequest(
+                _alternativeName,
+                EstimatedInitialCost: _alternativeInitialCost,
+                EstimatedRecurringCost: _alternativeRecurringCost));
+            if (!result.Succeeded)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _alternativeName = string.Empty;
+            _alternativeInitialCost = null;
+            _alternativeRecurringCost = null;
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

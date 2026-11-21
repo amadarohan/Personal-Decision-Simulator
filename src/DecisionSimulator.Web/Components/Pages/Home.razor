@@ -1,0 +1,145 @@
+@page "/"
+@using DecisionSimulator.Application.Common
+@using DecisionSimulator.Application.Features.Decisions
+@using DecisionSimulator.Application.Features.Simulations
+@using DecisionSimulator.Application.Features.AI
+@using DecisionSimulator.Domain.Enums
+@using DecisionSimulator.Web.Localization
+@using DecisionSimulator.Web.Services
+@inject DecisionService Decisions
+@inject SimulationService Simulations
+@inject AIConversationService Assistant
+@inject DisplayFormatter Formatter
+@inject IUserPreferencesAccessor Preferences
+@inject LanguageService Language
+
+<PageTitle>@Language.Strings.OverviewTitle</PageTitle>
+
+<h1>@Language.Strings.OverviewTitle</h1>
+
+<p class="lede">
+    @Language.Strings.OverviewLede
+</p>
+
+@if (_loading)
+{
+    <p class="muted">@Language.Strings.Loading</p>
+}
+else
+{
+    <section class="stat-grid">
+        <article class="stat-card">
+            <span class="stat-value">@_decisions.Count</span>
+            <span class="stat-label">@Language.Strings.StatDecisions</span>
+        </article>
+        <article class="stat-card">
+            <span class="stat-value">@_openCount</span>
+            <span class="stat-label">@Language.Strings.StatStillOpen</span>
+        </article>
+        <article class="stat-card">
+            <span class="stat-value">@_models.Count</span>
+            <span class="stat-label">@Language.Strings.StatModels</span>
+        </article>
+        <article class="stat-card">
+            <span class="stat-value">@(_assistantAvailable ? Language.Strings.AssistantReady : Language.Strings.AssistantOffline)</span>
+            <span class="stat-label">@Language.Strings.StatAssistant</span>
+        </article>
+    </section>
+
+    @if (!_assistantAvailable && _assistantReason is not null)
+    {
+        <p class="notice">@_assistantReason</p>
+    }
+
+    <section>
+        <h2>@Language.Strings.RecentDecisions</h2>
+
+        @if (_decisions.Count == 0)
+        {
+            <p class="muted">
+                @Language.Strings.NoDecisionsYet <a href="/decisions">@Language.Strings.CreateFirstOne</a>
+            </p>
+        }
+        else
+        {
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>@Language.Strings.ColTitle</th>
+                        <th>@Language.Strings.ColCategory</th>
+                        <th>@Language.Strings.ColStatus</th>
+                        <th>@Language.Strings.ColAlternatives</th>
+                        <th>@Language.Strings.ColScenarios</th>
+                        <th>@Language.Strings.ColUpdated</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var decision in _decisions.Take(8))
+                    {
+                        <tr>
+                            <td><a href="@($"/decisions/{decision.Id}")">@decision.Title</a></td>
+                            <td>@EnumLabels.Label(decision.Category, _persian)</td>
+                            <td><span class="pill">@EnumLabels.Label(decision.Status, _persian)</span></td>
+                            <td>@decision.AlternativeCount</td>
+                            <td>@decision.ScenarioCount</td>
+                            <td>@Formatter.FormatDate(decision.UpdatedAtUtc, _preferences.CalendarSystem, _preferences.TimeZoneId)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </section>
+
+    <section>
+        <h2>@Language.Strings.AvailableModels</h2>
+        <ul class="model-list">
+            @foreach (var model in _models)
+            {
+                <li>
+                    <strong>@model.DisplayName</strong>
+                    <span class="muted">v@(model.ModelVersion)</span>
+                    <p>@string.Join(", ", model.RequiredInputs)</p>
+                </li>
+            }
+        </ul>
+    </section>
+}
+
+@code {
+    private IReadOnlyList<DecisionSummaryDto> _decisions = [];
+    private IReadOnlyList<SimulationModelInfoDto> _models = [];
+    private UserPreferences _preferences = UserPreferences.Default;
+    private bool _loading = true;
+    private bool _assistantAvailable;
+    private bool _persian;
+    private string? _assistantReason;
+    private int _openCount;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Language.EnsureLoadedAsync();
+        _persian = Language.IsPersianLanguage;
+
+        _preferences = await Preferences.GetAsync();
+        _decisions = await Decisions.ListAsync();
+        _models = Simulations.AvailableModels;
+
+        _openCount = _decisions.Count(d =>
+            d.Status is not DecisionStatus.Decided
+                and not DecisionStatus.Cancelled
+                and not DecisionStatus.Reviewed);
+
+        var status = await Assistant.GetStatusAsync();
+        _assistantAvailable = status.IsAvailable;
+
+        // The application layer reports its reason in English because it has no
+        // access to the string catalogue. When no provider is configured at all
+        // the catalogue has a translated sentence for exactly that case, so the
+        // English text is dropped rather than shown inside a Persian page.
+        _assistantReason = status.ProviderKind == AIProviderKind.None
+            ? Language.Strings.NoModelConfigured
+            : status.UnavailableReason;
+
+        _loading = false;
+    }
+}

@@ -1,0 +1,172 @@
+@page "/scenarios"
+@using DecisionSimulator.Application.Common
+@using DecisionSimulator.Application.Features.Decisions
+@using DecisionSimulator.Application.Features.Scenarios
+@using DecisionSimulator.Domain.Enums
+@using DecisionSimulator.Web.Localization
+@using DecisionSimulator.Web.Services
+@inject DecisionService DecisionService
+@inject ScenarioService ScenarioService
+@inject DisplayFormatter Formatter
+@inject IUserPreferencesAccessor Preferences
+@inject LanguageService Language
+
+<PageTitle>@Language.Strings.ScenariosTitle</PageTitle>
+
+<h1>@Language.Strings.ScenariosTitle</h1>
+
+<p class="lede">
+    @Language.Strings.ScenariosLede
+</p>
+
+<section class="panel">
+    <h2>@Language.Strings.NewScenario</h2>
+
+    <div class="form-grid">
+        <label>
+            @Language.Strings.FieldDecision
+            <select @bind="_decisionId">
+                <option value="@Guid.Empty">@Language.Strings.SelectDecision</option>
+                @foreach (var decision in _decisions)
+                {
+                    <option value="@decision.Id">@decision.Title</option>
+                }
+            </select>
+        </label>
+
+        <label>
+            @Language.Strings.FieldName
+            <input @bind="_name" placeholder="@Language.Strings.ScenarioNamePlaceholder" />
+        </label>
+
+        <label>
+            @Language.Strings.FieldType
+            <select @bind="_type">
+                @foreach (var value in Enum.GetValues<ScenarioType>())
+                {
+                    <option value="@value">@EnumLabels.Label(value, _persian)</option>
+                }
+            </select>
+        </label>
+
+        <label>
+            @Language.Strings.FieldHorizonMonths
+            <input type="number" min="1" max="600" @bind="_horizonMonths" />
+        </label>
+    </div>
+
+    <button class="primary" @onclick="CreateAsync" disabled="@_busy">
+        @(_busy ? Language.Strings.Creating : Language.Strings.CreateScenario)
+    </button>
+
+    @if (_error is not null)
+    {
+        <p class="error" role="alert">@_error</p>
+    }
+</section>
+
+<section>
+    <h2>@Language.Strings.AllScenarios</h2>
+
+    @if (_scenarios.Count == 0)
+    {
+        <p class="muted">@Language.Strings.NoScenariosYet</p>
+    }
+    else
+    {
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>@Language.Strings.FieldName</th>
+                    <th>@Language.Strings.ColType</th>
+                    <th>@Language.Strings.ColStatus</th>
+                    <th>@Language.Strings.ColHorizon</th>
+                    <th>@Language.Strings.ColVariables</th>
+                    <th>@Language.Strings.ColRuns</th>
+                    <th>@Language.Strings.ColUpdated</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var scenario in _scenarios)
+                {
+                    <tr>
+                        <td>
+                            <a href="@($"/scenarios/{scenario.Id}")">@scenario.Name</a>
+                        </td>
+                        <td>@EnumLabels.Label(scenario.Type, _persian)</td>
+                        <td><span class="pill">@EnumLabels.Label(scenario.Status, _persian)</span></td>
+                        <td>@scenario.TimeHorizonMonths @Language.Strings.Months</td>
+                        <td>@scenario.VariableCount</td>
+                        <td>@scenario.RunCount</td>
+                        <td>@Formatter.FormatDate(scenario.UpdatedAtUtc, _preferences.CalendarSystem, _preferences.TimeZoneId)</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</section>
+
+@code {
+    private IReadOnlyList<DecisionSummaryDto> _decisions = [];
+    private IReadOnlyList<ScenarioSummaryDto> _scenarios = [];
+    private UserPreferences _preferences = UserPreferences.Default;
+
+    private Guid _decisionId = Guid.Empty;
+    private string _name = string.Empty;
+    private ScenarioType _type = ScenarioType.Expected;
+    private int _horizonMonths = 12;
+
+    private bool _busy;
+    private bool _persian;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Language.EnsureLoadedAsync();
+        _persian = Language.IsPersianLanguage;
+
+        _preferences = await Preferences.GetAsync();
+        _decisions = await DecisionService.ListAsync();
+        _scenarios = await ScenarioService.ListAsync();
+    }
+
+    private async Task CreateAsync()
+    {
+        _error = null;
+
+        if (_decisionId == Guid.Empty)
+        {
+            _error = Language.Strings.ErrorChooseDecision;
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_name))
+        {
+            _error = Language.Strings.ErrorScenarioNameRequired;
+            return;
+        }
+
+        _busy = true;
+
+        try
+        {
+            var result = await ScenarioService.CreateAsync(_decisionId, new CreateScenarioRequest(
+                _name,
+                _type,
+                _horizonMonths));
+
+            if (!result.Succeeded)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _name = string.Empty;
+            _scenarios = await ScenarioService.ListAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}
